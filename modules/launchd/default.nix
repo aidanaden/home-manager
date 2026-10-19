@@ -146,14 +146,24 @@ in
 
               verboseEcho "Stopping agent '$domain/$agentName'..."
               local bootout_output
-              bootout_output=$(run /bin/launchctl bootout --wait "$domain/$agentName" 2>&1) || {
+              # launchctl before macOS 26 rejects --wait, so poll until the job is gone.
+              # launchd kills a job that ignores SIGTERM after 20 seconds.
+              bootout_output=$(run /bin/launchctl bootout "$domain/$agentName" 2>&1) || {
                 # Only show warning if it's not the common "No such process" error
                 if [[ "$bootout_output" != *"No such process"* ]]; then
                   warnEcho "Failed to stop agent '$domain/$agentName': $bootout_output"
                 else
                   verboseEcho "Agent '$domain/$agentName' was not running"
                 fi
+                return
               }
+              [[ -v DRY_RUN ]] && return
+              local attempt
+              for ((attempt = 0; attempt < 125; attempt++)); do
+                /bin/launchctl print "$domain/$agentName" >/dev/null 2>&1 || return 0
+                sleep 0.2
+              done
+              warnEcho "Agent '$domain/$agentName' was still loaded 25 seconds after bootout"
             }
 
             installAndBootstrapAgent() {
